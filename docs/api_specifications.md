@@ -1,201 +1,284 @@
-# Splitbill API Specification (v1)
+# Splitbill API Specifications
 
-Base URL: `/api/v1`
-Auth: header `Authorization: Bearer <token>` (JWT, berlaku 24 jam)
-Semua nominal uang = **bilangan bulat rupiah**. Semua field JSON memakai camelCase.
+Dokumen kontrak REST API resmi proyek **Splitbill** (Stack: Node.js Express + PostgreSQL).
+Seluruh tim (Frontend & Backend) menggunakan spesifikasi ini sebagai acuan integrasi.
 
-## Format Respons
+> [!IMPORTANT]
+> **Base URL:** `http://localhost:5000/api/v1`
+> Semua nominal uang adalah **bilangan bulat rupiah** (integer, bukan desimal).
+> Perubahan kontrak ini wajib membuat PR berlabel `contract-change` yang disetujui FE dan BE.
 
-Sukses:
+---
 
-```json
-{ "success": true, "message": "...", "data": {}, "meta": {} }
-```
+## 1. Informasi Umum
 
-Galat:
+| Item | Nilai |
+|---|---|
+| Base URL (dev) | `http://localhost:5000/api/v1` |
+| Content-Type | `application/json` |
+| Auth Header | `Authorization: Bearer <token>` |
+| Token | JWT, valid 24 jam |
 
+### Format Respons Sukses
 ```json
 {
-  "success": false,
-  "message": "...",
-  "errors": [{ "field": "email", "message": "Format email tidak valid" }]
+  "success": true,
+  "message": "Pesan deskriptif",
+  "data": {},
+  "meta": {}
 }
 ```
 
-| Kode | Arti |
-|------|------|
-| 200 / 201 | Sukses |
-| 400 | Validasi gagal |
-| 401 | Belum login / token salah atau kedaluwarsa |
-| 403 | Bukan pemilik sumber daya |
-| 404 | Tidak ditemukan |
-| 409 | Duplikat (email / nama peserta) |
-| 422 | Aturan bisnis dilanggar |
-| 502 | Gagal ke layanan eksternal (storage) |
+### Format Respons Error
+```json
+{
+  "success": false,
+  "message": "Ringkasan error",
+  "errors": [
+    { "field": "email", "message": "Format email tidak valid" }
+  ]
+}
+```
+
+### Kode Status HTTP
+
+| Status | Arti |
+|---|---|
+| `200` | OK – request berhasil |
+| `201` | Created – resource baru dibuat |
+| `400` | Bad Request – validasi gagal |
+| `401` | Unauthorized – token tidak ada / tidak valid / kedaluwarsa |
+| `403` | Forbidden – bukan pemilik resource |
+| `404` | Not Found – resource tidak ada |
+| `409` | Conflict – duplikat (email sudah terdaftar, nama peserta kembar) |
+| `422` | Unprocessable Entity – aturan bisnis dilanggar (item tanpa penanggung, belum ada peserta) |
+| `500` | Internal Server Error |
 
 ---
 
-## 1. Auth
+## 2. Health Check
 
-### POST `/auth/register` (tanpa auth)
+### `GET /health`
 
-Request:
-
-```json
-{ "name": "Andi", "email": "andi@mail.com", "password": "rahasia123" }
-```
-
-Sukses `201`:
-
-```json
-{ "success": true, "message": "Registrasi berhasil",
-  "data": { "id": "uuid", "name": "Andi", "email": "andi@mail.com" } }
-```
-
-Galat: `400` validasi, `409` email sudah terdaftar. Field `password` tidak pernah dikembalikan.
-
-### POST `/auth/login` (tanpa auth)
-
-Request:
-
-```json
-{ "email": "andi@mail.com", "password": "rahasia123" }
-```
-
-Sukses `200`:
-
-```json
-{ "success": true, "message": "Login berhasil",
-  "data": { "token": "<jwt>", "user": { "id": "uuid", "name": "Andi", "email": "andi@mail.com", "role": "user" } } }
-```
-
-Galat: `400` validasi, `401` "Email atau kata sandi salah" (pesan sama untuk email salah maupun sandi salah).
-Rate limit: maks 10 percobaan / 15 menit / IP.
-
-### GET `/auth/me` (auth)
-
-Sukses `200`:
-
-```json
-{ "success": true, "data": { "id": "uuid", "name": "Andi", "email": "andi@mail.com", "role": "user" } }
-```
-
-Galat: `401`.
+| | |
+|---|---|
+| **Auth** | Tidak diperlukan |
+| **Response `200`** | `{ success, message, data: { status, timestamp } }` |
 
 ---
 
-## 2. Bills
+## 3. Auth Endpoints (`/auth`)
 
-### GET `/bills` (auth)
+### `POST /auth/register`
+Daftarkan akun baru.
 
-Query: `search` (ILIKE judul/kafe), `status` (`draft|finalized`), `page` (min 1, default 1), `limit` (1-50, default 10).
-
-Sukses `200`:
-
+- **Auth:** Tidak
+- **Body:**
 ```json
-{ "success": true,
-  "data": [ { "id": "uuid", "title": "Makan Malam", "venueName": "Kafe A", "billDate": "2026-09-01", "status": "draft", "createdAt": "..." } ],
-  "meta": { "totalRows": 25, "totalPages": 3, "currentPage": 1 } }
+{ "name": "Andi", "email": "andi@example.com", "password": "Password123!" }
 ```
-
-Galat: `400`, `401`.
-
-### POST `/bills` (auth)
-
-Request:
-
+- **Validasi:** `name` 2-100 kar; `email` valid & unik; `password` min 8 kar.
+- **`201`:**
 ```json
-{ "title": "Makan Malam", "venueName": "Kafe A", "billDate": "2026-09-01",
-  "taxMode": "percent", "taxValue": 10,
-  "serviceMode": "percent", "serviceValue": 0, "serviceSplit": "proportional" }
+{
+  "success": true, "message": "User registered successfully",
+  "data": {
+    "user": { "id": "uuid", "name": "Andi", "email": "andi@example.com",
+              "role": "user", "created_at": "2026-11-26T..." },
+    "token": "eyJ..."
+  }
+}
 ```
-
-Sukses `201`: detail tagihan. Galat: `400`, `401`.
-
-### GET `/bills/:id` (auth, hanya pemilik)
-
-Sukses `200`: tagihan + `participants[]` + `items[]` (setiap item memuat `assigneeIds[]`).
-Galat: `401`, `403`, `404`.
-
-### PUT `/bills/:id` (auth, hanya pemilik)
-
-Request: field boleh sebagian. Sukses `200`.
-Galat: `400`, `403`, `404`, `422` jika tagihan sudah `finalized`.
-
-### DELETE `/bills/:id` (auth, hanya pemilik)
-
-Sukses `200`. Galat: `403`, `404`.
-
-### POST `/bills/:id/receipt` (auth, hanya pemilik)
-
-`multipart/form-data`, field `receipt` (jpeg/png/webp, maks 2 MB).
-
-Sukses `200`:
-
-```json
-{ "success": true, "data": { "receiptUrl": "https://..." } }
-```
-
-Galat: `400` tipe/ukuran salah, `403`, `404`, `502`.
-
-### POST `/bills/:id/finalize` (auth, hanya pemilik)
-
-Mengunci tagihan dan membuat `shareCode`.
-Sukses `200`: `{ "data": { "shareCode": "abc123xyz" } }`. Galat: `403`, `404`, `422` tidak valid (mis. belum ada peserta/item).
+- **Error:** `400` validasi, `409` email sudah terdaftar.
 
 ---
 
-## 3. Participants
+### `POST /auth/login`
+Login dan dapatkan JWT (maks 10 percobaan / 15 menit per IP).
 
-### POST `/bills/:billId/participants` (auth)
-
-Request: `{ "name": "Budi" }`. Sukses `201`. Galat: `400`, `403`, `404`, `409` nama kembar dalam satu tagihan.
-
-### PATCH `/participants/:id` (auth)
-
-Request: `{ "name": "Budi S." }`. Sukses `200`. Galat: `400`, `403`, `404`, `409`.
-
-### DELETE `/participants/:id` (auth)
-
-Sukses `200`. Galat: `403`, `404`.
+- **Auth:** Tidak
+- **Body:** `{ "email": "andi@example.com", "password": "Password123!" }`
+- **`200`:** sama seperti register, field `data.user` tanpa `password`.
+- **Error:** `400` body kosong, `401` email/password salah (pesan sama untuk keduanya).
 
 ---
 
-## 4. Items
+### `GET /auth/me`
+Profil pengguna dari JWT.
 
-### POST `/bills/:billId/items` (auth)
+- **Auth:** Bearer token (wajib)
+- **`200`:** `{ data: { user: { id, name, email, role, created_at } } }`
+- **Error:** `401`
 
-Request:
+---
 
+## 4. Bills Endpoints (`/bills`)
+
+### `GET /bills`
+Daftar tagihan milik user, dengan pencarian & paginasi.
+
+- **Auth:** Wajib
+- **Query:** `?search=kafe&status=draft&page=1&limit=10` (limit maks 50)
+- **`200`:**
 ```json
-{ "name": "Pizza", "price": 60000, "qty": 1, "assigneeIds": ["p1", "p2"] }
+{
+  "success": true, "message": "Bills fetched successfully",
+  "data": [{ "id": "uuid", "title": "Makan Siang", "venue_name": "Kafe ABC",
+              "bill_date": "2026-11-26", "status": "draft", "created_at": "..." }],
+  "meta": { "totalRows": 42, "totalPages": 5, "currentPage": 1 }
+}
 ```
-
-Sukses `201`. Galat: `400`, `403`, `404`, `422` jika `assigneeIds` kosong atau bukan peserta tagihan ini.
-
-### PUT `/items/:id` (auth)
-
-Request: sama seperti POST (boleh sebagian). Sukses `200`. Galat: `400`, `403`, `404`, `422`.
-
-### DELETE `/items/:id` (auth)
-
-Sukses `200`. Galat: `403`, `404`.
+- **Error:** `401`
 
 ---
 
-## 5. Summary (sumber kebenaran angka)
+### `POST /bills`
+Buat tagihan baru.
 
-### GET `/bills/:id/summary` (auth)
+- **Auth:** Wajib
+- **Body:**
+```json
+{
+  "title": "Makan Siang Kafe ABC",
+  "venueName": "Kafe ABC",
+  "billDate": "2026-11-26",
+  "taxMode": "percent",
+  "taxValue": 10,
+  "serviceMode": "percent",
+  "serviceValue": 0,
+  "serviceSplit": "proportional"
+}
+```
+- **Validasi:** `taxMode` ∈ `{percent,nominal}`, `serviceMode` ∈ `{percent,nominal}`, `serviceSplit` ∈ `{proportional,equal}`.
+- **`201`:** detail tagihan baru.
+- **Error:** `400`, `401`
 
-Pajak dibagi **rata** ke semua peserta. Sisa pembulatan dibagi 1 rupiah per orang mengikuti `sort_order`. Invarian: jumlah `total` semua orang = `grandTotal`.
+---
 
-Sukses `200`:
+### `GET /bills/:id`
+Detail tagihan + participants + items (dengan assigneeIds).
 
+- **Auth:** Wajib (harus pemilik)
+- **`200`:** `{ data: { ...bill, participants: [...], items: [...] } }`
+- **Error:** `401`, `403`, `404`
+
+---
+
+### `PUT /bills/:id`
+Update field tagihan (partial update diizinkan).
+
+- **Auth:** Wajib (harus pemilik)
+- **Body:** field opsional (sama seperti POST)
+- **`200`:** tagihan yang diperbarui
+- **Error:** `400`, `401`, `403`, `404`
+
+---
+
+### `DELETE /bills/:id`
+Hapus tagihan beserta semua peserta, item, dan asignment (cascade).
+
+- **Auth:** Wajib (harus pemilik)
+- **`200`:** `{ success: true, message: "Bill deleted successfully", data: null }`
+- **Error:** `401`, `403`, `404`
+
+---
+
+### `POST /bills/:id/receipt`
+Upload foto struk (multipart/form-data, field `receipt`).
+
+- **Auth:** Wajib (harus pemilik)
+- **Validasi:** JPEG/PNG/WEBP, maks 2 MB.
+- **`200`:** `{ data: { receiptUrl: "https://..." } }`
+- **Error:** `400` tipe/ukuran salah, `403`, `404`
+
+---
+
+## 5. Participants Endpoints
+
+### `POST /bills/:billId/participants`
+Tambah peserta ke tagihan.
+
+- **Auth:** Wajib (harus pemilik tagihan)
+- **Body:** `{ "name": "Budi" }`
+- **`201`:** `{ data: { id, bill_id, name, sort_order } }`
+- **Error:** `400`, `409` nama kembar, `403`, `404`
+
+---
+
+### `PATCH /participants/:id`
+Ubah nama peserta.
+
+- **Auth:** Wajib
+- **Body:** `{ "name": "Budi Santoso" }`
+- **`200`:** peserta yang diperbarui
+- **Error:** `400`, `403`, `404`, `422` tagihan sudah finalized
+
+---
+
+### `DELETE /participants/:id`
+Hapus peserta (cascade hapus asignment).
+
+- **Auth:** Wajib
+- **`200`:** `{ data: null }`
+- **Error:** `403`, `404`, `422` tagihan sudah finalized
+
+---
+
+## 6. Items Endpoints
+
+### `POST /bills/:billId/items`
+Tambah item menu beserta penanggung.
+
+- **Auth:** Wajib (harus pemilik tagihan)
+- **Body:**
+```json
+{
+  "name": "Nasi Goreng",
+  "price": 25000,
+  "qty": 1,
+  "assigneeIds": ["participant-uuid-1", "participant-uuid-2"]
+}
+```
+- **Validasi:** `price` >= 0 (integer), `qty` > 0, `assigneeIds` tidak boleh kosong dan harus anggota tagihan ini.
+- **`201`:** `{ data: { id, bill_id, name, price, qty, assigneeIds } }`
+- **Error:** `400`, `422` assigneeIds kosong/tidak valid, `403`, `404`
+
+---
+
+### `PUT /items/:id`
+Update item (partial update).
+
+- **Auth:** Wajib
+- **Body:** field opsional sama seperti POST
+- **`200`:** item yang diperbarui
+- **Error:** `400`, `403`, `404`, `422` tagihan sudah finalized
+
+---
+
+### `DELETE /items/:id`
+Hapus item.
+
+- **Auth:** Wajib
+- **`200`:** `{ data: null }`
+- **Error:** `403`, `404`, `422` tagihan sudah finalized
+
+---
+
+## 7. Summary & Finalize
+
+### `GET /bills/:id/summary`
+Hitung pembagian tagihan per orang (sumber kebenaran angka – FE tidak menghitung ulang).
+
+- **Auth:** Wajib
+- **`200`:**
 ```json
 {
   "success": true,
   "data": {
-    "subtotal": 80000, "taxTotal": 8000, "serviceTotal": 0, "grandTotal": 88000,
+    "subtotal": 80000,
+    "taxTotal": 8000,
+    "serviceTotal": 0,
+    "grandTotal": 88000,
     "taxRule": "equal",
     "perPerson": [
       { "participantId": "p1", "name": "Andi", "subtotal": 40000, "tax": 2667, "service": 0, "total": 42667 },
@@ -205,28 +288,48 @@ Sukses `200`:
   }
 }
 ```
-
-Galat: `401`, `403`, `404`, `422` belum ada peserta.
-
----
-
-## 6. Public (read-only)
-
-### GET `/public/bills/:shareCode` (tanpa auth)
-
-Sukses `200`: tampilan read-only (tanpa email pemilik). Galat: `404`.
+- **Error:** `401`, `403`, `404`, `422` belum ada peserta
 
 ---
 
-## 7. Dashboard
+### `POST /bills/:id/finalize`
+Kunci tagihan dan buat `shareCode`.
 
-### GET `/dashboard/stats` (auth)
+- **Auth:** Wajib (harus pemilik)
+- **`200`:** `{ data: { shareCode: "AbCdEf123456" } }`
+- **Error:** `401`, `403`, `404`, `422` tagihan tidak valid untuk dikunci
 
-Sukses `200`:
+---
 
+## 8. Public Endpoint
+
+### `GET /public/bills/:shareCode`
+Tampilan read-only untuk dibagikan (tanpa email pemilik).
+
+- **Auth:** Tidak diperlukan
+- **`200`:** detail tagihan + summary (tanpa data sensitif)
+- **Error:** `404`
+
+---
+
+## 9. Dashboard
+
+### `GET /dashboard/stats`
+Agregasi statistik tagihan milik user.
+
+- **Auth:** Wajib
+- **`200`:**
 ```json
-{ "success": true,
-  "data": { "totalBills": 5, "totalSpending": 450000, "totalTaxSplit": 45000, "recent": [] } }
+{
+  "success": true,
+  "data": {
+    "totalBills": 12,
+    "totalSpending": 2500000,
+    "totalTaxSplit": 250000,
+    "recent": [
+      { "id": "uuid", "title": "Makan Siang", "grandTotal": 88000, "created_at": "..." }
+    ]
+  }
+}
 ```
-
-Galat: `401`.
+- **Error:** `401`
